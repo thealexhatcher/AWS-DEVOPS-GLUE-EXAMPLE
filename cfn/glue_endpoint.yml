@@ -1,0 +1,80 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Glue Stack"
+Parameters:
+  Name:
+    Type: String
+  SSHPubKey:
+    Type: String
+  VpcId:
+    Type: String
+  SubnetId:
+    Type: String
+  ExtraPythonLibsS3Path:
+    Type: String
+    Default: ""
+  DPUs:
+    Type: Number 
+    Default: 2
+    
+Conditions:
+  HasExtraPythonLibsS3Path: !Not [ !Equals ["", !Ref ExtraPythonLibsS3Path] ]
+Resources:
+
+  GlueEndpointRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action: sts:AssumeRole
+          Principal:
+            Service:
+            - glue.amazonaws.com
+      Policies:
+      - PolicyName: "base_policy" 
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Resource: '*' 
+            Effect: Allow
+            Action:
+            - glue:*
+            - athena:*
+            - s3:*
+            - dynamodb:*
+
+  DevEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub ${AWS::StackName}-CodeBuildSecurityGroup
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        CidrIp : 0.0.0.0/0
+        IpProtocol: -1
+        FromPort: -1
+        ToPort: -1
+      SecurityGroupEgress:
+        CidrIp : 0.0.0.0/0
+        IpProtocol: -1
+        FromPort: -1
+        ToPort: -1
+        
+  DevEndpoint:
+    Type: AWS::Glue::DevEndpoint
+    Properties:
+      EndpointName: !Ref Name
+      ExtraPythonLibsS3Path: !If [ HasExtraPythonLibsS3Path, !Ref ExtraPythonLibsS3Path, !Ref "AWS::NoValue"]
+      NumberOfNodes: !Ref DPUs
+      PublicKey: !Sub "ssh-rsa ${SSHPubKey} developer@prudential.com"
+      RoleArn: !GetAtt GlueEndpointRole.Arn
+      #SecurityGroupIds: 
+      #  - !Ref DevEndpointSecurityGroup
+      #SubnetId: !Ref SubnetId
+      
+Outputs:
+  EndpointAddress:
+    Description: Glue Developer Endpoint DNS Name  
+    Value: !Ref DevEndpoint

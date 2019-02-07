@@ -1,0 +1,12 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: "ETL Pipeline Resources Stack"
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+Outputs:
+  ArtifactBucket:
+    Description: ETL Pipeline Artifact Bucket  
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: etl:resources:artifactbucket

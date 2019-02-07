@@ -1,0 +1,72 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  ETL Input Stack
+Resources:
+
+  Bucket:
+    Type: AWS::S3::Bucket
+    DependsOn: 
+    - Queue
+    - QueuePolicy
+    Properties:
+      NotificationConfiguration:
+        QueueConfigurations:
+        - Event: "s3:ObjectCreated:*"
+          Filter:
+            S3Key:
+              Rules:
+              - Name: suffix
+                Value: .json
+          Queue: !GetAtt Queue.Arn
+
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    DependsOn: Queue
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal: "*"
+          Action:
+            - sqs:*
+          # Target a wildcard resource name based on the same format as QueueName
+          Resource: !GetAtt Queue.Arn
+          Condition: 
+            ArnLike: 
+              aws:SourceArn: "arn:aws:s3:::*"
+      Queues:
+        - !Ref Queue
+        
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      MaximumMessageSize: 262144
+      MessageRetentionPeriod: 864000
+      QueueName: !Sub "${AWS::StackName}"
+      ReceiveMessageWaitTimeSeconds: 0
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt FailureQueue.Arn
+        maxReceiveCount: 1
+      VisibilityTimeout: 7200
+      
+  FailureQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: 0
+      MaximumMessageSize: 262144
+      MessageRetentionPeriod: 864000
+      QueueName: !Sub "${AWS::StackName}-failure"
+      ReceiveMessageWaitTimeSeconds: 0
+      VisibilityTimeout: 500
+
+Outputs:
+  Bucket:
+    Description: ETL Bucket  
+    Value: !Ref Bucket
+  
+  Queue:
+    Description: ETL Process Queue
+    Value: !GetAtt Queue.Arn

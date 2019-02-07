@@ -1,0 +1,31 @@
+version: 0.2
+phases:
+  install:
+    commands:
+      - yum install -y jq
+      - pip install --upgrade pip
+      - pip install --upgrade awscli
+      - pip install ibm_db
+      - pip install boto3
+      - pip install simplejson
+  pre_build:
+    commands:
+    - S3_BUCKET=$(cat $CODEBUILD_SRC_DIR_testdataartifacts/outputs.json | jq -r .Bucket)
+    - DDB_TABLE=$(cat $CODEBUILD_SRC_DIR_testddbtableartifacts/outputs.json | jq -r .TableName)
+    - STATEMACHINE_ARN=$(cat $CODEBUILD_SRC_DIR_testglueartifacts/outputs.json | jq -r .ProcessDcStateMachine)
+    - aws s3 rm s3://$S3_BUCKET --recursive #clean bucket
+  build:
+    commands:
+    - aws s3 sync s3://rde-datalake-raw/qa/dc_psp/ s3://$S3_BUCKET/qa/dc_psp/ --exclude 'manifest/*' #copy data
+    - aws s3 cp s3://rde-datalake-raw/qa/dc_psp/manifest/2018-11-26.json 2018-11-26.json
+    - sed -i "s~rde-datalake-raw~$S3_BUCKET~g" 2018-11-26.json
+    - aws s3 cp 2018-11-26.json s3://$S3_BUCKET/qa/dc_psp/manifest/2018-11-26.json
+    - sleep 30
+    - ./stack/statemachine_wait.sh $STATEMACHINE_ARN
+   
+    - echo "The table name is " $DDB_TABLE
+    - python ./data_validation_test/dynamo_db_test.py $DDB_TABLE
+    - echo "status\nOK" > "test_results.csv"
+artifacts:
+  files: 
+    - 'test_results.csv'

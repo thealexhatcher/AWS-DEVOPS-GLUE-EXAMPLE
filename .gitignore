@@ -1,0 +1,15 @@
+.spark
+.pytest_cache
+.coverage
+*.pyc
+.*.swp
+.python-version
+derby.log
+tools/zeppelin/notebooks/*
+tools/zeppelin/logs/*
+metastore_db/*
+*.log
+build/*
+*.~c9*
+.direnv
+.DS_Store

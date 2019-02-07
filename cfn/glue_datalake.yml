@@ -1,0 +1,310 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Glue Datalake Stack"
+
+Parameters:
+  SourceBucket:
+    Type: String
+  ProcessQueueArn:
+    Type: String
+  ProcessedBucket:
+    Type: String
+  ProcessScript:
+    Type: String
+  CrawlerScript:
+    Type: String
+  ImportScript:
+    Type: String
+  OutputTable:
+    Type: String
+
+Resources:
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref "AWS::StackName"
+  
+  ProcessedCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub ${AWS::StackName}-crawler
+      Role: !GetAtt Role.Arn
+      DatabaseName: !Ref GlueDatabase
+      SchemaChangePolicy: 
+        UpdateBehavior: LOG
+        DeleteBehavior: DEPRECATE_IN_DATABASE
+      Targets: 
+        S3Targets:
+          - Path: !Sub "s3://${ProcessedBucket}/${ProcessedKeyPrefix}"
+  
+  #####   GLUE JOBS   #####
+  ProcessJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${AWS::StackName}-process-dc"
+      Role: !GetAtt Role.Arn
+      AllocatedCapacity: 40
+      Command: 
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${SourceBucket}/${ProcessDcScript}"
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      MaxRetries: 0
+      DefaultArguments:
+        "--job-name": !Sub "${AWS::StackName}}-process-dc"
+        "--job-language": "python"
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--enable-metrics": ""
+        "--extra-py-files": !Sub "s3://${SourceBucket}/${PackageKey}"
+        "--glue_database": !Ref GlueDatabase
+        "--s3_bucket": !Ref ProcessedBucket
+        "--s3_prefix": !Ref ProcessedKeyPrefix
+
+  ImportJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${AWS::StackName}-dc-ddb-import"
+      Role: !GetAtt Role.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${SourceBucket}/${DcDdbImportScript}"
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      MaxRetries: 0
+      AllocatedCapacity: 10
+      DefaultArguments: 
+        "--job-language": "scala"
+        "--class": "GlueJob"
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--enable-metrics": ""
+        "--glueDatabase": !Ref "GlueDatabase"
+        "--ddbTableName": !Ref "AccountTable"
+        "--region": !Ref AWS::Region
+        
+        
+  #####   GLUE JOBS RUNNERS  #####
+  ProcessStateMachine:
+    Type: "AWS::StepFunctions::StateMachine"
+    Properties:
+      StateMachineName: !Sub "${AWS::StackName}-process"
+      RoleArn: !GetAtt Role.Arn
+      DefinitionString:
+        !Sub |-
+          {
+            "StartAt": "Process",
+            "States": {
+              "Process": {
+                "Type": "Task",
+                "Resource": "${ProcessRunner.Arn}",
+                "Next": "Crawl-Processed-Tables",
+                "Retry": [{
+                  "ErrorEquals": ["Sleep"],
+                  "IntervalSeconds": 60,
+                  "BackoffRate": 1,
+                  "MaxAttempts": 500
+                }],
+                "Catch": [{
+                  "ErrorEquals": ["Continuation"],
+                  "ResultPath": "$.continuation",
+                  "Next": "Process"
+                }]
+              },
+              "Crawl-Processed-Tables": {
+                "Type": "Task",
+                "Resource": "${GlueCrawlerRunner.Arn}",
+                "Next": "Import",
+                "Retry": [{
+                  "ErrorEquals": ["Sleep"],
+                  "IntervalSeconds": 60,
+                  "BackoffRate": 1,
+                  "MaxAttempts": 500
+                }],
+                "Catch": [{
+                  "ErrorEquals": ["Continuation"],
+                  "ResultPath": "$.continuation",
+                  "Next": "Crawl-Processed-Tables"
+                }]
+              },
+              "Import": {
+                "Type": "Task",
+                "Resource": "${ImportRunner.Arn}",
+                "End": true,
+                "Retry": [{
+                  "ErrorEquals": ["Sleep"],
+                  "IntervalSeconds": 60,
+                  "BackoffRate": 1,
+                  "MaxAttempts": 500
+                }],
+                "Catch": [{
+                  "ErrorEquals": ["Continuation"],
+                  "ResultPath": "$.continuation",
+                  "Next": "Import"
+                }]
+              }
+            }
+          }
+      
+  ProcessRunner:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: rde.lambdas.run_glue_job.handler
+      Code:
+        S3Bucket: !Ref SourceBucket
+        S3Key: !Ref PackageKey
+      Environment:
+        Variables: 
+          JOB_NAME: !Ref ProcessDCJob
+          JOB_ARGS: '{ "--manifest": "manifest" }'
+      MemorySize: 128
+      Role: !GetAtt Role.Arn
+      Runtime: python2.7
+      Timeout: 300
+      
+  ImportRunner:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: rde.lambdas.run_glue_job.handler
+      Code:
+        S3Bucket: !Ref SourceBucket
+        S3Key: !Ref PackageKey
+      Environment:
+        Variables: 
+          JOB_NAME: !Ref DcDDBImportJob
+          JOB_ARGS: >
+             { 
+                "--partitionCode": "manifest.partition_code",
+                "--cycleDate": "manifest.cycle_date"
+             }
+      MemorySize: 128
+      Role: !GetAtt Role.Arn
+      Runtime: python2.7
+      Timeout: 300
+      
+  GlueCrawlerRunner:
+    Type: "AWS::Lambda::Function"
+    Properties: 
+      Handler: rde.lambdas.run_glue_crawler.handler
+      Code:
+        S3Bucket: !Ref SourceBucket
+        S3Key: !Ref PackageKey
+      Environment:
+        Variables: 
+          CRAWLER: !Ref ProcessedCrawler
+      MemorySize: 128
+      Role: !GetAtt Role.Arn
+      Runtime: python2.7
+      Timeout: 300
+  
+  #####   IAM Role   #####
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action: sts:AssumeRole
+          Principal:
+            Service:
+              - glue.amazonaws.com
+              - lambda.amazonaws.com
+              - !Sub 'states.${AWS::Region}.amazonaws.com'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: "step_invoke" 
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: "*"
+        - PolicyName: "cloudwatch_logs_policy" 
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action: 
+               - logs:CreateLogGroup
+               - logs:CreateLogStream
+               - logs:PutLogEvents
+               - cloudwatch:PutMetricData
+              Resource: arn:aws:logs:*:*:*
+        - PolicyName: "glue_job_policy" 
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Resource: '*' 
+              Effect: Allow
+              Action:
+              - glue:*
+              - athena:*
+              - s3:*
+              - dynamodb:*
+              
+  ProcessQueueFunction:
+      Type: AWS::Lambda::Function
+      Properties:
+        Description: Process Queue Job Watcher
+        Handler: rde.lambdas.start_step.handler
+        Role: !GetAtt FunctionRole.Arn
+        Code:
+          S3Bucket: !Ref SourceBucket
+          S3Key: !Ref PackageKey
+        Environment:
+          Variables: 
+            GLUE_SFN_ARN: !Ref ProcessDcStateMachine
+            GLUE_SFN_NAME: !GetAtt ProcessDcStateMachine.Name 
+        MemorySize: 128
+        Runtime: python2.7
+        Timeout: 300
+        
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal: {Service: [lambda.amazonaws.com]}
+          Action: ['sts:AssumeRole']
+      Path: /
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+      - PolicyName: sqs_policy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+              - sqs:*
+              Resource: !Ref ProcessQueueArn
+            - Effect: Allow
+              Action:
+              - s3:Get*
+              Resource: "*"
+            - Effect: Allow
+              Action: 
+               - states:*
+              Resource: "*"
+
+  FunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      Enabled: true
+      EventSourceArn: !Ref ProcessQueueArn
+      FunctionName: !GetAtt ProcessQueueFunction.Arn
+        
+Outputs:
+  GlueDatabase:
+    Value: !Ref GlueDatabase
+  ProcessCrawler:
+    Value: !Ref ProcessCrawler
+  ProcessStateMachine:
+    Value: !Ref ProcessStateMachine

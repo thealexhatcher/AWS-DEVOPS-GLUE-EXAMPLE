@@ -1,0 +1,57 @@
+
+version: 0.2
+phases:
+  install:
+    commands:
+      - yum install -y zip
+      - pip install --upgrade pip
+      - pip install --upgrade awscli
+  pre_build:
+    commands:
+      - aws --version
+  build:
+    commands:
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - BUCKET="$PIPELINE_BUCKET"
+      - PREFIX="$PIPELINE_DIR/StagedArtifacts/commit-$COMMIT_HASH"
+      
+      - python setup.py build
+      - pip install -r requirements/base.txt -t build/lib
+      - cd build/lib
+      - zip -FS -r ../pylib.zip .
+      - cd -
+      
+      - PACKAGEKEY=$PREFIX/pylib.zip
+      - EXTRACTRAWSCRIPT="$PREFIX/extract_datastage_raw.py"
+      - PROCESSDCSCRIPT="$PREFIX/process_dc.py"
+      - DCDDBIMPORTSCRIPT="$PREFIX/dc_ddb_import.scala"
+      
+      - aws s3 cp build/pylib.zip s3://$BUCKET/$PACKAGEKEY
+      - aws s3 cp rde/jobs/extract_datastage_raw.py s3://$BUCKET/$EXTRACTRAWSCRIPT
+      - aws s3 cp rde/jobs/process_dc.py s3://$BUCKET/$PROCESSDCSCRIPT
+      - aws s3 cp ddb/dc_ddb_import.scala s3://$BUCKET/$DCDDBIMPORTSCRIPT
+      
+      - sed -i "s~SOURCEBUCKET~$BUCKET~g" ../cfn/glue_datalake.config_test.json
+      - sed -i "s~PACKAGEKEY~$PACKAGEKEY~g" ../cfn/glue_datalake.config_test.json
+      - sed -i "s~EXTRACTRAWSCRIPT~$EXTRACTRAWSCRIPT~g" ../cfn/glue_datalake.config_test.json  
+      - sed -i "s~PROCESSDCSCRIPT~$PROCESSDCSCRIPT~g" ../cfn/glue_datalake.config_test.json 
+      - sed -i "s~DCDDBIMPORTSCRIPT~$DCDDBIMPORTSCRIPT~g" ../cfn/glue_datalake.config_test.json 
+      
+      - sed -i "s~SOURCEBUCKET~$BUCKET~g" ../cfn/glue_datalake.config_stage.json
+      - sed -i "s~PACKAGEKEY~$PACKAGEKEY~g" ../cfn/glue_datalake.config_stage.json
+      - sed -i "s~EXTRACTRAWSCRIPT~$EXTRACTRAWSCRIPT~g" ../cfn/glue_datalake.config_stage.json  
+      - sed -i "s~PROCESSDCSCRIPT~$PROCESSDCSCRIPT~g" ../cfn/glue_datalake.config_stage.json 
+      - sed -i "s~DCDDBIMPORTSCRIPT~$DCDDBIMPORTSCRIPT~g" ../cfn/glue_datalake.config_stage.json 
+      
+      - sed -i "s~SOURCEBUCKET~$BUCKET~g" ../cfn/glue_datalake.config_prod.json
+      - sed -i "s~PACKAGEKEY~$PACKAGEKEY~g" ../cfn/glue_datalake.config_prod.json
+      - sed -i "s~EXTRACTRAWSCRIPT~$EXTRACTRAWSCRIPT~g" ../cfn/glue_datalake.config_prod.json  
+      - sed -i "s~PROCESSDCSCRIPT~$PROCESSDCSCRIPT~g" ../cfn/glue_datalake.config_prod.json 
+      - sed -i "s~DCDDBIMPORTSCRIPT~$DCDDBIMPORTSCRIPT~g" ../cfn/glue_datalake.config_prod.json 
+      
+artifacts:
+  files: 
+    - "../cfn/glue_datalake.config_test.json"
+    - "../cfn/glue_datalake.config_stage.json"
+    - "../cfn/glue_datalake.config_prod.json"    
+    

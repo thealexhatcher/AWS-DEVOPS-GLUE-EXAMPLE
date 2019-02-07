@@ -1,0 +1,13 @@
+{
+  "Parameters" : {
+    "SourceBucket": "SOURCEBUCKET",
+    "PackageKey": "PACKAGEKEY",
+    "ExtractRawScript": "EXTRACTRAWSCRIPT",
+    "ProcessDcScript": "PROCESSDCSCRIPT",
+    "DcDdbImportScript": "DCDDBIMPORTSCRIPT",
+    "ProcessedBucket": "OUTPUTS3BUCKET",
+    "ProcessedKeyPrefix": "prod",
+    "AccountTable": "RDE-API-TABLE-STAGE-Table-IJ5A5WP9DO10",
+    "ProcessQueueArn": "SQS"
+  }
+}

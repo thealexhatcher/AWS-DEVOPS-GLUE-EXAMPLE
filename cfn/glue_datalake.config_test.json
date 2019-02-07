@@ -1,0 +1,18 @@
+{
+  "Parameters" : {
+    "SourceBucket": "SOURCEBUCKET",
+    "PackageKey": "PACKAGEKEY",
+    "ExtractRawScript": "EXTRACTRAWSCRIPT",
+    "ProcessDcScript": "PROCESSDCSCRIPT",
+    "DcDdbImportScript": "DCDDBIMPORTSCRIPT",
+    "ProcessedBucket": "OUTPUTS3BUCKET",
+    "ProcessedKeyPrefix": "test",
+    "AccountTable": "DYNAMODB",
+    "ProcessQueueArn": "SQS"
+  }
+}
+
+
+
+
+
